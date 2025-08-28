@@ -888,4 +888,1570 @@ th {
                     <li>F1: Dashboard</li>
                     <li>F2: Capital</li>
                     <li>F3: Companies</li>
+                    <li>F4: Sale Item List</li>
+                    <li>F5: Purchase</li>
+                    <li>F6: Sale</li>
+                    <li>F7: Ledger</li>
+                    <li>F8: Expense/Income</li>
+                    <li>F9: Stock Alert</li>
+                    <li>F10: Reports</li>
+                    <li>F11: Cheque Transactions</li>
+                    <li>F12: Info</li>
+                    <li>Ctrl + A: Toggle Android Mode</li>
+                    <li>Ctrl + D: Delete Company (in Companies section)</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+    <script>
+        // Data storage
+let capital = null;
+let companies = [];
+let items = [];
+let stock = {};
+let stockAlerts = {};
+let purchases = [];
+let sales = [];
+let ledgers = [];
+let expenseIncome = [];
+let balance = { cash: 0, upi: 0, cheque: 0 };
+let debtors = new Set();
+let creditors = new Set();
+let chequeTransactions = [];
+let invoiceCounter = 1;
+
+// Load data from localStorage
+function loadData() {
+    const storedChequeTransactions = localStorage.getItem('chequeTransactions');
+    if (storedChequeTransactions) {
+        chequeTransactions = JSON.parse(storedChequeTransactions).map(tx => ({
+            ...tx,
+            transactionDate: new Date(tx.transactionDate)
+        }));
+    }
+    const storedCapital = localStorage.getItem('capital');
+    if (storedCapital) {
+        capital = JSON.parse(storedCapital);
+        balance.cash = capital.amount;
+    }
+    const storedCompanies = localStorage.getItem('companies');
+    if (storedCompanies) {
+        companies = JSON.parse(storedCompanies);
+    }
+    const storedItems = localStorage.getItem('items');
+    if (storedItems) {
+        items = JSON.parse(storedItems);
+    }
+    const storedStock = localStorage.getItem('stock');
+    if (storedStock) {
+        stock = JSON.parse(storedStock);
+    }
+    const storedStockAlerts = localStorage.getItem('stockAlerts');
+    if (storedStockAlerts) {
+        stockAlerts = JSON.parse(storedStockAlerts);
+    }
+    const storedPurchases = localStorage.getItem('purchases');
+    if (storedPurchases) {
+        purchases = JSON.parse(storedPurchases).map(p => ({ ...p, date: new Date(p.date) }));
+    }
+    const storedSales = localStorage.getItem('sales');
+    if (storedSales) {
+        sales = JSON.parse(storedSales).map(s => ({ ...s, date: new Date(s.date) }));
+    }
+    const storedLedgers = localStorage.getItem('ledgers');
+    if (storedLedgers) {
+        ledgers = JSON.parse(storedLedgers);
+    }
+    const storedExpenseIncome = localStorage.getItem('expenseIncome');
+    if (storedExpenseIncome) {
+        expenseIncome = JSON.parse(storedExpenseIncome);
+    }
+    const storedBalance = localStorage.getItem('balance');
+    if (storedBalance) {
+        balance = JSON.parse(storedBalance);
+    }
+    const storedDebtors = localStorage.getItem('debtors');
+    if (storedDebtors) {
+        debtors = new Set(JSON.parse(storedDebtors));
+    }
+    const storedCreditors = localStorage.getItem('creditors');
+    if (storedCreditors) {
+        creditors = new Set(JSON.parse(storedCreditors));
+    }
+    const storedInvoiceCounter = localStorage.getItem('invoiceCounter');
+    if (storedInvoiceCounter) {
+        invoiceCounter = parseInt(storedInvoiceCounter);
+    }
+}
+
+// Save data to localStorage
+function saveData() {
+    localStorage.setItem('chequeTransactions', JSON.stringify(chequeTransactions));
+    localStorage.setItem('capital', JSON.stringify(capital));
+    localStorage.setItem('companies', JSON.stringify(companies));
+    localStorage.setItem('items', JSON.stringify(items));
+    localStorage.setItem('stock', JSON.stringify(stock));
+    localStorage.setItem('stockAlerts', JSON.stringify(stockAlerts));
+    localStorage.setItem('purchases', JSON.stringify(purchases));
+    localStorage.setItem('sales', JSON.stringify(sales));
+    localStorage.setItem('ledgers', JSON.stringify(ledgers));
+    localStorage.setItem('expenseIncome', JSON.stringify(expenseIncome));
+    localStorage.setItem('balance', JSON.stringify(balance));
+    localStorage.setItem('debtors', JSON.stringify([...debtors]));
+    localStorage.setItem('creditors', JSON.stringify([...creditors]));
+    localStorage.setItem('invoiceCounter', invoiceCounter);
+}
+
+// Utility Functions
+function showSection(sectionId) {
+    if (!capital && sectionId !== 'capital' && sectionId !== 'info') {
+        alert('Please add capital details first.');
+        sectionId = 'capital';
+    }
+    document.querySelectorAll('.section').forEach(section => {
+        section.classList.remove('active');
+    });
+    document.getElementById(sectionId).classList.add('active');
+}
+
+function updateDashboard() {
+    document.getElementById('total-balance').textContent = (balance.cash + balance.upi + balance.cheque).toFixed(2);
+    document.getElementById('total-profit').textContent = (sales.reduce((sum, sale) => sum + sale.totalAmount, 0) + 
+        purchases.reduce((sum, p) => sum + (['cash', 'upi'].includes(p.paymentMethod) ? -p.totalAmount : p.paymentMethod === 'creditor' ? p.totalAmount : 0), 0)).toFixed(2);
+    document.getElementById('total-customers').textContent = new Set(sales.map(s => s.customerName)).size;
+    document.getElementById('total-items').textContent = Object.keys(stock).length;
+    document.getElementById('total-cash').textContent = balance.cash.toFixed(2);
+    document.getElementById('total-upi').textContent = balance.upi.toFixed(2);
+    document.getElementById('pending-cheques').textContent = chequeTransactions.filter(tx => !tx.cleared).length;
+
+    const tbody = document.getElementById('item-list-table').querySelector('tbody');
+    tbody.innerHTML = '';
+    Object.keys(stock).forEach(itemName => {
+        const row = tbody.insertRow();
+        row.innerHTML = `<td>${itemName}</td><td>${stock[itemName].stock}</td>`;
+    });
+}
+
+// Capital
+document.getElementById('capital-form').addEventListener('submit', function(e) {
+    e.preventDefault();
+    const logoInput = document.getElementById('capital-logo');
+    const logo = logoInput.files[0] ? URL.createObjectURL(logoInput.files[0]) : '';
+    capital = {
+        companyName: document.getElementById('capital-company-name').value,
+        contact: document.getElementById('capital-contact').value,
+        logo,
+        gstin: document.getElementById('capital-gstin').value,
+        ifsc: document.getElementById('capital-ifsc').value,
+        address: document.getElementById('capital-address').value,
+        country: document.getElementById('capital-country').value,
+        state: document.getElementById('capital-state').value,
+        stateCode: document.getElementById('capital-state-code').value,
+        email: document.getElementById('capital-email').value,
+        accountNumber: document.getElementById('capital-account-number').value,
+        password: document.getElementById('capital-password').value,
+        amount: parseFloat(document.getElementById('capital-amount').value)
+    };
+    balance.cash = capital.amount;
+    companies.push({
+        companyName: capital.companyName,
+        contact: capital.contact,
+        logo: capital.logo,
+        gstin: capital.gstin,
+        ifsc: capital.ifsc,
+        address: capital.address,
+        country: capital.country,
+        state: capital.state,
+        stateCode: capital.stateCode,
+        email: capital.email,
+        accountNumber: capital.accountNumber
+    });
+    updateCompaniesTable();
+    updateDashboard();
+    this.reset();
+    document.getElementById('capital-logo').value = ''; // Explicitly clear file input
+    saveData();
+    alert('Capital added successfully!');
+});
+
+// Companies
+function updateCompaniesTable() {
+    const tbody = document.getElementById('companies-table').querySelector('tbody');
+    tbody.innerHTML = '';
+    companies.forEach((company, index) => {
+        const row = tbody.insertRow();
+        row.innerHTML = `
+            <td>${company.companyName}</td>
+            <td>
+                Contact: ${company.contact}<br>
+                Address: ${company.address}<br>
+                GSTIN: ${company.gstin || 'N/A'}<br>
+                IFSC: ${company.ifsc || 'N/A'}
+            </td>
+            <td class="action-icons">
+                <span onclick="editCompany(${index})">Edit</span>
+                <span onclick="deleteCompany(${index})">Delete</span>
+            </td>
+        `;
+    });
+}
+
+function editCompany(index) {
+    const password = prompt('Enter password to edit company:');
+    if (password !== capital.password) {
+        alert('Incorrect password!');
+        return;
+    }
+    const company = companies[index];
+    const modal = document.createElement('div');
+    modal.className = 'modal';
+    modal.style.display = 'flex';
+    modal.innerHTML = `
+        <div class="modal-content">
+            <div class="buttons">
+                <button class="close-btn" onclick="this.closest('.modal').remove()">Close</button>
+            </div>
+            <h3>Edit Company</h3>
+            <form id="edit-company-form">
+                <label>Company Name</label>
+                <input type="text" value="${company.companyName}" id="edit-company-name" required>
+                <label>Contact Number</label>
+                <input type="text" value="${company.contact}" id="edit-contact" required>
+                <label>Company Logo</label>
+                <input type="file" id="edit-logo" accept="image/*">
+                <label>GSTIN Number</label>
+                <input type="text" value="${company.gstin || ''}" id="edit-gstin">
+                <label>IFSC Number</label>
+                <input type="text" value="${company.ifsc || ''}" id="edit-ifsc">
+                <label>Address</label>
+                <input type="text" value="${company.address}" id="edit-address" required>
+                <label>Country</label>
+                <input type="text" value="${company.country}" id="edit-country" required>
+                <label>State</label>
+                <input type="text" value="${company.state}" id="edit-state" required>
+                <label>State Code</label>
+                <input type="text" value="${company.stateCode}" id="edit-state-code" required>
+                <label>Email ID</label>
+                <input type="email" value="${company.email}" id="edit-email" required>
+                <label>Account Number</label>
+                <input type="text" value="${company.accountNumber}" id="edit-account-number" required>
+                <button type="submit">Save</button>
+            </form>
+        </div>
+    `;
+    document.body.appendChild(modal);
+    modal.querySelector('#edit-company-form').addEventListener('submit', function(e) {
+        e.preventDefault();
+        const logoInput = document.getElementById('edit-logo');
+        companies[index] = {
+            companyName: document.getElementById('edit-company-name').value,
+            contact: document.getElementById('edit-contact').value,
+            logo: logoInput.files[0] ? URL.createObjectURL(logoInput.files[0]) : company.logo,
+            gstin: document.getElementById('edit-gstin').value,
+            ifsc: document.getElementById('edit-ifsc').value,
+            address: document.getElementById('edit-address').value,
+            country: document.getElementById('edit-country').value,
+            state: document.getElementById('edit-state').value,
+            stateCode: document.getElementById('edit-state-code').value,
+            email: document.getElementById('edit-email').value,
+            accountNumber: document.getElementById('edit-account-number').value
+        };
+        updateCompaniesTable();
+        this.reset();
+        document.getElementById('edit-logo').value = ''; // Explicitly clear file input
+        saveData();
+        modal.remove();
+        alert('Company updated successfully!');
+    });
+}
+
+function deleteCompany(index) {
+    if (confirm('Are you sure you want to delete this company?')) {
+        if (confirm('Confirm deletion of this company.')) {
+            companies.splice(index, 1);
+            updateCompaniesTable();
+            saveData();
+            alert('Company deleted successfully!');
+        }
+    }
+}
+
+// Sale Item List
+document.getElementById('gst-rate').addEventListener('change', function() {
+    const gstRate = parseFloat(this.value);
+    const purchaseRate = parseFloat(document.getElementById('purchase-rate').value) || 0;
+    const cgstRate = gstRate / 2;
+    const sgstRate = gstRate / 2;
+    document.getElementById('cgst-rate').value = cgstRate.toFixed(2);
+    document.getElementById('sgst-rate').value = sgstRate.toFixed(2);
+    document.getElementById('sale-rate').value = (purchaseRate * 1.2 + purchaseRate * (gstRate / 100)).toFixed(2);
+});
+
+document.getElementById('sale-item-form').addEventListener('submit', function(e) {
+    e.preventDefault();
+    const item = {
+        name: document.getElementById('item-name').value,
+        supplierName: document.getElementById('supplier-name').value,
+        supplierContact: document.getElementById('supplier-contact').value,
+        supplierAddress: document.getElementById('supplier-address').value,
+        type: document.getElementById('item-type').value,
+        unit: document.getElementById('item-unit').value,
+        category: document.getElementById('item-category').value,
+        purchaseRate: parseFloat(document.getElementById('purchase-rate').value),
+        gstRate: parseFloat(document.getElementById('gst-rate').value),
+        cgstRate: parseFloat(document.getElementById('cgst-rate').value),
+        sgstRate: parseFloat(document.getElementById('sgst-rate').value),
+        saleRate: parseFloat(document.getElementById('sale-rate').value)
+    };
+    items.push(item);
+    stock[item.name] = { stock: 0, sold: 0 };
+    updateSaleItemTable();
+    updatePurchaseItemSelect();
+    updateSaleItemSelect();
+    updateAlertItemSelect();
+    updateDashboard();
+    this.reset();
+    document.getElementById('cgst-rate').value = '';
+    document.getElementById('sgst-rate').value = '';
+    document.getElementById('sale-rate').value = '';
+    saveData();
+    alert('Item added successfully!');
+});
+
+function updateSaleItemTable() {
+    const tbody = document.getElementById('sale-item-table').querySelector('tbody');
+    tbody.innerHTML = '';
+    items.forEach((item, index) => {
+        const row = tbody.insertRow();
+        row.innerHTML = `
+            <td>${item.name}</td>
+            <td>${item.supplierName}</td>
+            <td>${item.type}</td>
+            <td>${item.unit}</td>
+            <td>${item.category}</td>
+            <td>${item.purchaseRate.toFixed(2)}</td>
+            <td>${item.saleRate.toFixed(2)}</td>
+            <td>${item.gstRate}%</td>
+            <td>${item.cgstRate}%</td>
+            <td>${item.sgstRate}%</td>
+            <td class="action-icons">
+                <span onclick="editSaleItem(${index})">Edit</span>
+                <span onclick="deleteSaleItem(${index})">Delete</span>
+            </td>
+        `;
+    });
+}
+
+function editSaleItem(index) {
+    const item = items[index];
+    const modal = document.createElement('div');
+    modal.className = 'modal';
+    modal.style.display = 'flex';
+    modal.innerHTML = `
+        <div class="modal-content">
+            <div class="buttons">
+                <button class="close-btn" onclick="this.closest('.modal').remove()">Close</button>
+            </div>
+            <h3>Edit Item</h3>
+            <form id="edit-item-form">
+                <label>Item Name</label>
+                <input type="text" value="${item.name}" id="edit-item-name" required>
+                <label>Supplier Name</label>
+                <input type="text" value="${item.supplierName}" id="edit-supplier-name" required>
+                <label>Supplier Contact Number</label>
+                <input type="text" value="${item.supplierContact}" id="edit-supplier-contact" required>
+                <label>Supplier Address</label>
+                <input type="text" value="${item.supplierAddress}" id="edit-supplier-address" required>
+                <label>Type</label>
+                <input type="text" value="${item.type}" id="edit-item-type" required>
+                <label>Unit</label>
+                <input type="text" value="${item.unit}" id="edit-item-unit" required>
+                <label>Category</label>
+                <input type="text" value="${item.category}" id="edit-item-category" required>
+                <label>Purchase Rate</label>
+                <input type="number" value="${item.purchaseRate}" id="edit-purchase-rate" required>
+                <label>GST Rate</label>
+                <select id="edit-gst-rate" required>
+                    <option value="5" ${item.gstRate === 5 ? 'selected' : ''}>5%</option>
+                    <option value="12" ${item.gstRate === 12 ? 'selected' : ''}>12%</option>
+                    <option value="18" ${item.gstRate === 18 ? 'selected' : ''}>18%</option>
+                    <option value="28" ${item.gstRate === 28 ? 'selected' : ''}>28%</option>
+                </select>
+                <label>CGST Rate</label>
+                <input type="number" value="${item.cgstRate}" id="edit-cgst-rate" readonly>
+                <label>SGST Rate</label>
+                <input type="number" value="${item.sgstRate}" id="edit-sgst-rate" readonly>
+                <label>Sale Rate</label>
+                <input type="number" value="${item.saleRate}" id="edit-sale-rate" readonly>
+                <button type="submit">Save</button>
+            </form>
+        </div>
+    `;
+    document.body.appendChild(modal);
+    const gstSelect = modal.querySelector('#edit-gst-rate');
+    const purchaseRateInput = modal.querySelector('#edit-purchase-rate');
+    const cgstRateInput = modal.querySelector('#edit-cgst-rate');
+    const sgstRateInput = modal.querySelector('#edit-sgst-rate');
+    const saleRateInput = modal.querySelector('#edit-sale-rate');
+    
+    function updateRates() {
+        const gstRate = parseFloat(gstSelect.value);
+        const purchaseRate = parseFloat(purchaseRateInput.value) || 0;
+        const cgstRate = gstRate / 2;
+        const sgstRate = gstRate / 2;
+        cgstRateInput.value = cgstRate.toFixed(2);
+        sgstRateInput.value = sgstRate.toFixed(2);
+        saleRateInput.value = (purchaseRate * 1.2 + purchaseRate * (gstRate / 100)).toFixed(2);
+    }
+    
+    gstSelect.addEventListener('change', updateRates);
+    purchaseRateInput.addEventListener('input', updateRates);
+    
+    modal.querySelector('#edit-item-form').addEventListener('submit', function(e) {
+        e.preventDefault();
+        const oldName = items[index].name;
+        items[index] = {
+            name: document.getElementById('edit-item-name').value,
+            supplierName: document.getElementById('edit-supplier-name').value,
+            supplierContact: document.getElementById('edit-supplier-contact').value,
+            supplierAddress: document.getElementById('edit-supplier-address').value,
+            type: document.getElementById('edit-item-type').value,
+            unit: document.getElementById('edit-item-unit').value,
+            category: document.getElementById('edit-item-category').value,
+            purchaseRate: parseFloat(document.getElementById('edit-purchase-rate').value),
+            gstRate: parseFloat(document.getElementById('edit-gst-rate').value),
+            cgstRate: parseFloat(document.getElementById('edit-cgst-rate').value),
+            sgstRate: parseFloat(document.getElementById('edit-sgst-rate').value),
+            saleRate: parseFloat(document.getElementById('edit-sale-rate').value)
+        };
+        if (oldName !== items[index].name) {
+            stock[items[index].name] = stock[oldName] || { stock: 0, sold: 0 };
+            delete stock[oldName];
+            if (stockAlerts[oldName]) {
+                stockAlerts[items[index].name] = stockAlerts[oldName];
+                delete stockAlerts[oldName];
+            }
+            purchases.forEach(p => {
+                if (p.itemName === oldName) p.itemName = items[index].name;
+            });
+            sales.forEach(s => {
+                if (s.itemName === oldName) s.itemName = items[index].name;
+            });
+            chequeTransactions.forEach(tx => {
+                if (tx.itemName === oldName) tx.itemName = items[index].name;
+            });
+        }
+        updateSaleItemTable();
+        updatePurchaseItemSelect();
+        updateSaleItemSelect();
+        updateAlertItemSelect();
+        updateStockAlertTable();
+        updateChequeTransactionsTable();
+        updateDashboard();
+        checkStockAlerts();
+        this.reset();
+        saveData();
+        modal.remove();
+        alert('Item updated successfully!');
+    });
+}
+
+function deleteSaleItem(index) {
+    if (confirm(`Are you sure you want to delete ${items[index].name}?`)) {
+        const itemName = items[index].name;
+        items.splice(index, 1);
+        delete stock[itemName];
+        delete stockAlerts[itemName];
+        updateSaleItemTable();
+        updatePurchaseItemSelect();
+        updateSaleItemSelect();
+        updateAlertItemSelect();
+        updateStockAlertTable();
+        updateChequeTransactionsTable();
+        updateDashboard();
+        checkStockAlerts();
+        saveData();
+        alert('Item deleted successfully!');
+    }
+}
+
+// Purchase
+function updatePurchaseItemSelect() {
+    const select = document.getElementById('purchase-item-name');
+    select.innerHTML = '<option value="">Select Item</option>';
+    items.forEach(item => {
+        const option = document.createElement('option');
+        option.value = item.name;
+        option.textContent = item.name;
+        select.appendChild(option);
+    });
+}
+
+document.getElementById('purchase-item-name').addEventListener('change', function() {
+    const itemName = this.value;
+    const item = items.find(i => i.name === itemName);
+    if (item) {
+        document.getElementById('purchase-supplier-name').value = item.supplierName;
+        document.getElementById('purchase-supplier-address').value = item.supplierAddress;
+        document.getElementById('purchase-type').value = item.type;
+        document.getElementById('purchase-unit').value = item.unit;
+        document.getElementById('purchase-category').value = item.category;
+        document.getElementById('purchase-rate-display').value = item.purchaseRate.toFixed(2);
+        document.getElementById('purchase-sale-rate').value = item.saleRate.toFixed(2);
+        document.getElementById('purchase-gst-rate').value = item.gstRate.toFixed(2);
+        document.getElementById('purchase-cgst-rate').value = item.cgstRate.toFixed(2);
+        document.getElementById('purchase-sgst-rate').value = item.sgstRate.toFixed(2);
+        updatePurchaseAmounts();
+    } else {
+        document.getElementById('purchase-supplier-name').value = '';
+        document.getElementById('purchase-supplier-address').value = '';
+        document.getElementById('purchase-type').value = '';
+        document.getElementById('purchase-unit').value = '';
+        document.getElementById('purchase-category').value = '';
+        document.getElementById('purchase-rate-display').value = '';
+        document.getElementById('purchase-sale-rate').value = '';
+        document.getElementById('purchase-gst-rate').value = '';
+        document.getElementById('purchase-cgst-rate').value = '';
+        document.getElementById('purchase-sgst-rate').value = '';
+        document.getElementById('purchase-cgst-amount').value = '';
+        document.getElementById('purchase-sgst-amount').value = '';
+        document.getElementById('purchase-total-amount').value = '';
+    }
+});
+
+document.getElementById('purchase-quantity').addEventListener('input', updatePurchaseAmounts);
+
+function updatePurchaseAmounts() {
+    const quantity = parseFloat(document.getElementById('purchase-quantity').value) || 0;
+    const purchaseRate = parseFloat(document.getElementById('purchase-rate-display').value) || 0;
+    const gstRate = parseFloat(document.getElementById('purchase-gst-rate').value) || 0;
+    const cgstAmount = (purchaseRate * quantity * (gstRate / 2 / 100)).toFixed(2);
+    const sgstAmount = (purchaseRate * quantity * (gstRate / 2 / 100)).toFixed(2);
+    const totalAmount = (purchaseRate * quantity + parseFloat(cgstAmount) + parseFloat(sgstAmount)).toFixed(2);
+    document.getElementById('purchase-cgst-amount').value = cgstAmount;
+    document.getElementById('purchase-sgst-amount').value = sgstAmount;
+    document.getElementById('purchase-total-amount').value = totalAmount;
+}
+
+document.getElementById('purchase-payment-method').addEventListener('change', function() {
+    document.getElementById('cheque-details-purchase').style.display = this.value === 'cheque' ? 'block' : 'none';
+});
+
+document.getElementById('purchase-form').addEventListener('submit', function(e) {
+    e.preventDefault();
+    const itemName = document.getElementById('purchase-item-name').value;
+    const quantity = parseInt(document.getElementById('purchase-quantity').value);
+    const totalAmount = parseFloat(document.getElementById('purchase-total-amount').value);
+    const paymentMethod = document.getElementById('purchase-payment-method').value;
+    
+    if (!itemName || quantity <= 0) {
+        alert('Please select an item and enter a valid quantity.');
+        return;
+    }
+    
+    if (['cash', 'upi'].includes(paymentMethod) && totalAmount > (balance[paymentMethod] || 0)) {
+        alert(`Insufficient ${paymentMethod} balance!`);
+        return;
+    }
+    
+    const purchase = {
+        itemName,
+        description: document.getElementById('purchase-description').value,
+        quantity,
+        totalAmount,
+        cgstAmount: parseFloat(document.getElementById('purchase-cgst-amount').value),
+        sgstAmount: parseFloat(document.getElementById('purchase-sgst-amount').value),
+        currency: document.getElementById('purchase-currency').value,
+        paymentMethod,
+        date: new Date(document.getElementById('purchase-date').value)
+    };
+    
+    if (paymentMethod === 'cheque') {
+        const chequeDate = document.getElementById('purchase-cheque-date').value;
+        const bankName = document.getElementById('purchase-bank-name').value;
+        const chequeNumber = document.getElementById('purchase-cheque-number').value;
+        if (!chequeDate || !bankName || !chequeNumber) {
+            alert('Please fill in all cheque details.');
+            return;
+        }
+        chequeTransactions.push({
+            type: 'Purchase',
+            itemName,
+            amount: totalAmount,
+            currency: purchase.currency,
+            chequeDate,
+            bankName,
+            chequeNumber,
+            transactionDate: new Date(),
+            cleared: false
+        });
+    }
+    
+    purchases.push(purchase);
+    stock[itemName].stock += quantity;
+    if (paymentMethod === 'creditor') {
+        creditors.add(itemName);
+    } else if (['cash', 'upi'].includes(paymentMethod)) {
+        balance[paymentMethod] -= totalAmount;
+    }
+    updatePurchaseTable();
+    updateChequeTransactionsTable();
+    updateDebtorCreditorSelect();
+    updateDashboard();
+    checkStockAlerts();
+    this.reset();
+    document.getElementById('purchase-item-name').value = '';
+    document.getElementById('purchase-supplier-name').value = '';
+    document.getElementById('purchase-supplier-address').value = '';
+    document.getElementById('purchase-type').value = '';
+    document.getElementById('purchase-unit').value = '';
+    document.getElementById('purchase-category').value = '';
+    document.getElementById('purchase-rate-display').value = '';
+    document.getElementById('purchase-sale-rate').value = '';
+    document.getElementById('purchase-gst-rate').value = '';
+    document.getElementById('purchase-cgst-rate').value = '';
+    document.getElementById('purchase-sgst-rate').value = '';
+    document.getElementById('purchase-cgst-amount').value = '';
+    document.getElementById('purchase-sgst-amount').value = '';
+    document.getElementById('purchase-total-amount').value = '';
+    document.getElementById('cheque-details-purchase').style.display = 'none';
+    document.getElementById('purchase-cheque-date').value = '';
+    document.getElementById('purchase-bank-name').value = '';
+    document.getElementById('purchase-cheque-number').value = '';
+    saveData();
+    alert('Purchase recorded successfully!');
+});
+
+function updatePurchaseTable() {
+    const tbody = document.getElementById('purchase-table').querySelector('tbody');
+    tbody.innerHTML = '';
+    purchases.forEach(purchase => {
+        const row = tbody.insertRow();
+        const displayAmount = ['cash', 'upi'].includes(purchase.paymentMethod) ? -purchase.totalAmount : purchase.totalAmount;
+        row.innerHTML = `
+            <td>${purchase.itemName}</td>
+            <td>${purchase.quantity}</td>
+            <td>${displayAmount.toFixed(2)}</td>
+            <td>${purchase.currency}</td>
+            <td>${purchase.cgstAmount.toFixed(2)}</td>
+            <td>${purchase.sgstAmount.toFixed(2)}</td>
+            <td>${purchase.paymentMethod}</td>
+            <td>${purchase.date.toISOString().split('T')[0]}</td>
+        `;
+    });
+}
+
+// Sale
+function updateSaleItemSelect() {
+    const select = document.getElementById('sale-item-name');
+    select.innerHTML = '<option value="">Select Item</option>';
+    items.forEach(item => {
+        const option = document.createElement('option');
+        option.value = item.name;
+        option.textContent = item.name;
+        select.appendChild(option);
+    });
+}
+
+document.getElementById('sale-item-name').addEventListener('change', function() {
+    const itemName = this.value;
+    const item = items.find(i => i.name === itemName);
+    if (item) {
+        document.getElementById('sale-type').value = item.type;
+        document.getElementById('sale-unit').value = item.unit;
+        document.getElementById('sale-category').value = item.category;
+        document.getElementById('sale-purchase-rate').value = item.purchaseRate.toFixed(2);
+        document.getElementById('sale-sale-rate').value = item.saleRate.toFixed(2);
+        document.getElementById('sale-gst-rate').value = item.gstRate.toFixed(2);
+        document.getElementById('sale-cgst-rate').value = item.cgstRate.toFixed(2);
+        document.getElementById('sale-sgst-rate').value = item.sgstRate.toFixed(2);
+        updateSaleAmounts();
+    } else {
+        document.getElementById('sale-type').value = '';
+        document.getElementById('sale-unit').value = '';
+        document.getElementById('sale-category').value = '';
+        document.getElementById('sale-purchase-rate').value = '';
+        document.getElementById('sale-sale-rate').value = '';
+        document.getElementById('sale-gst-rate').value = '';
+        document.getElementById('sale-cgst-rate').value = '';
+        document.getElementById('sale-sgst-rate').value = '';
+        document.getElementById('sale-cgst-amount').value = '';
+        document.getElementById('sale-sgst-amount').value = '';
+        document.getElementById('sale-total-amount').value = '';
+    }
+});
+
+document.getElementById('sale-quantity').addEventListener('input', updateSaleAmounts);
+document.getElementById('sale-discount').addEventListener('input', updateSaleAmounts);
+document.getElementById('discount-checkbox').addEventListener('change', function() {
+    document.getElementById('sale-discount').disabled = !this.checked;
+    updateSaleAmounts();
+});
+
+document.getElementById('sale-payment-method').addEventListener('change', function() {
+    document.getElementById('cheque-details-sale').style.display = this.value === 'cheque' ? 'block' : 'none';
+});
+
+function updateSaleAmounts() {
+    const quantity = parseFloat(document.getElementById('sale-quantity').value) || 0;
+    const saleRate = parseFloat(document.getElementById('sale-sale-rate').value) || 0;
+    const gstRate = parseFloat(document.getElementById('sale-gst-rate').value) || 0;
+    const discount = document.getElementById('discount-checkbox').checked ? parseFloat(document.getElementById('sale-discount').value) || 0 : 0;
+    const cgstAmount = (saleRate * quantity * (gstRate / 2 / 100)).toFixed(2);
+    const sgstAmount = (saleRate * quantity * (gstRate / 2 / 100)).toFixed(2);
+    const baseAmount = saleRate * quantity;
+    const discountedAmount = baseAmount * (1 - discount / 100);
+    const totalAmount = (discountedAmount + parseFloat(cgstAmount) + parseFloat(sgstAmount)).toFixed(2);
+    document.getElementById('sale-cgst-amount').value = cgstAmount;
+    document.getElementById('sale-sgst-amount').value = sgstAmount;
+    document.getElementById('sale-total-amount').value = totalAmount;
+}
+
+document.getElementById('sale-form').addEventListener('submit', function(e) {
+    e.preventDefault();
+    const itemName = document.getElementById('sale-item-name').value;
+    const quantity = parseInt(document.getElementById('sale-quantity').value);
+    const totalAmount = parseFloat(document.getElementById('sale-total-amount').value);
+    const paymentMethod = document.getElementById('sale-payment-method').value;
+    
+    if (!itemName || quantity <= 0) {
+        alert('Please select an item and enter a valid quantity.');
+        return;
+    }
+    
+    if (quantity > stock[itemName].stock) {
+        alert('Insufficient stock!');
+        return;
+    }
+    
+    const sale = {
+        itemName,
+        description: document.getElementById('sale-description').value,
+        customerName: document.getElementById('sale-customer-name').value,
+        customerAddress: document.getElementById('sale-customer-address').value,
+        customerContact: document.getElementById('sale-customer-contact').value,
+        quantity,
+        discount: document.getElementById('discount-checkbox').checked ? parseFloat(document.getElementById('sale-discount').value) || 0 : 0,
+        totalAmount,
+        cgstAmount: parseFloat(document.getElementById('sale-cgst-amount').value),
+        sgstAmount: parseFloat(document.getElementById('sale-sgst-amount').value),
+        currency: document.getElementById('sale-currency').value,
+        paymentMethod,
+        date: new Date(document.getElementById('sale-date').value),
+        invoiceNumber: `INV-${invoiceCounter.toString().padStart(4, '0')}`
+    };
+    
+    if (paymentMethod === 'cheque') {
+        const chequeDate = document.getElementById('sale-cheque-date').value;
+        const bankName = document.getElementById('sale-bank-name').value;
+        const chequeNumber = document.getElementById('sale-cheque-number').value;
+        if (!chequeDate || !bankName || !chequeNumber) {
+            alert('Please fill in all cheque details.');
+            return;
+        }
+        chequeTransactions.push({
+            type: 'Sale',
+            itemName: sale.customerName,
+            amount: totalAmount,
+            currency: sale.currency,
+            chequeDate,
+            bankName,
+            chequeNumber,
+            transactionDate: new Date(),
+            cleared: false,
+            invoiceNumber: sale.invoiceNumber
+        });
+    }
+    
+    sales.push(sale);
+    invoiceCounter++;
+    stock[itemName].stock -= quantity;
+    stock[itemName].sold += quantity;
+    if (paymentMethod === 'debtor') {
+        debtors.add(sale.customerName);
+    } else if (['cash', 'upi'].includes(paymentMethod)) {
+        balance[paymentMethod] += totalAmount;
+    }
+    updateSaleTable();
+    updateChequeTransactionsTable();
+    updateDebtorCreditorSelect();
+    updateDashboard();
+    checkStockAlerts();
+    this.reset();
+    document.getElementById('sale-item-name').value = '';
+    document.getElementById('sale-type').value = '';
+    document.getElementById('sale-unit').value = '';
+    document.getElementById('sale-category').value = '';
+    document.getElementById('sale-purchase-rate').value = '';
+    document.getElementById('sale-sale-rate').value = '';
+    document.getElementById('sale-gst-rate').value = '';
+    document.getElementById('sale-cgst-rate').value = '';
+    document.getElementById('sale-sgst-rate').value = '';
+    document.getElementById('sale-cgst-amount').value = '';
+    document.getElementById('sale-sgst-amount').value = '';
+    document.getElementById('sale-total-amount').value = '';
+    document.getElementById('sale-discount').value = '';
+    document.getElementById('sale-discount').disabled = true;
+    document.getElementById('discount-checkbox').checked = false;
+    document.getElementById('cheque-details-sale').style.display = 'none';
+    document.getElementById('sale-cheque-date').value = '';
+    document.getElementById('sale-bank-name').value = '';
+    document.getElementById('sale-cheque-number').value = '';
+    saveData();
+    alert('Sale recorded successfully!');
+});
+
+function updateSaleTable() {
+    const tbody = document.getElementById('sale-table').querySelector('tbody');
+    tbody.innerHTML = '';
+    sales.forEach((sale, index) => {
+        const row = tbody.insertRow();
+        row.innerHTML = `
+            <td>${sale.itemName}</td>
+            <td>${sale.customerName}</td>
+            <td>${sale.quantity}</td>
+            <td>${sale.discount}%</td>
+            <td>${sale.totalAmount.toFixed(2)}</td>
+            <td>${sale.currency}</td>
+            <td>${sale.cgstAmount.toFixed(2)}</td>
+            <td>${sale.sgstAmount.toFixed(2)}</td>
+            <td>${sale.paymentMethod}</td>
+            <td>${sale.date.toISOString().split('T')[0]}</td>
+            <td>${sale.invoiceNumber}</td>
+            <td><span class="action-icons" onclick="generateInvoice(${index})">Invoice</span></td>
+        `;
+    });
+}
+
+function generateInvoice(index) {
+    const sale = sales[index];
+    const item = items.find(i => i.name === sale.itemName);
+    const modal = document.createElement('div');
+    modal.className = 'modal';
+    modal.style.display = 'flex';
+    modal.innerHTML = `
+        <div class="modal-content">
+            <div class="buttons no-print">
+                <button onclick="downloadInvoice()">Download PDF</button>
+                <button class="close-btn" onclick="this.closest('.modal').remove()">Close</button>
+            </div>
+            <div class="invoice-box">
+                <div class="invoice-logo">
+                    ${capital.logo ? `<img src="${capital.logo}" alt="Company Logo">` : ''}
+                </div>
+                <h3>Invoice</h3>
+                <p><strong>Invoice Number:</strong> ${sale.invoiceNumber}</p>
+                <p><strong>Company:</strong> ${capital.companyName}</p>
+                <p><strong>Address:</strong> ${capital.address}, ${capital.state}, ${capital.country}</p>
+                <p><strong>GSTIN:</strong> ${capital.gstin || 'N/A'}</p>
+                <p><strong>Contact:</strong> ${capital.contact}</p>
+                <hr>
+                <p><strong>Customer:</strong> ${sale.customerName}</p>
+                <p><strong>Address:</strong> ${sale.customerAddress}</p>
+                <p><strong>Contact:</strong> ${sale.customerContact}</p>
+                <p><strong>Date:</strong> ${sale.date.toISOString().split('T')[0]}</p>
+                <hr>
+                <h4>Items</h4>
+                <table class="invoice-table">
+                    <thead>
+                        <tr>
+                            <th>Item Name</th>
+                            <th>Quantity</th>
+                            <th>Unit Price</th>
+                            <th>Discount</th>
+                            <th>CGST</th>
+                            <th>SGST</th>
+                            <th>Total</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>${sale.itemName}</td>
+                            <td>${sale.quantity}</td>
+                            <td>${item.saleRate.toFixed(2)} ${sale.currency}</td>
+                            <td>${sale.discount}%</td>
+                            <td>${sale.cgstAmount.toFixed(2)}</td>
+                            <td>${sale.sgstAmount.toFixed(2)}</td>
+                            <td>${sale.totalAmount.toFixed(2)}</td>
+                        </tr>
+                    </tbody>
+                </table>
+                <hr>
+                <p><strong>Total Amount:</strong> ${sale.totalAmount.toFixed(2)} ${sale.currency}</p>
+                <p><strong>Payment Method:</strong> ${sale.paymentMethod}</p>
+                <p><strong>Description:</strong> ${sale.description || 'N/A'}</p>
+            </div>
+        </div>
+    `;
+    document.body.appendChild(modal);
+}
+
+/*
+NOTE FOR PDF DOWNLOAD:
+For the "Download PDF" button to work correctly, please add the following CSS to your stylesheet.
+This CSS ensures that when you print, only the invoice is visible, and the "Download" and "Close" buttons are hidden.
+The browser's "Print" dialog will allow you to "Save as PDF".
+
+@media print {
+  body > .section, body > .sidebar, body > #stock-alert-notification, body > script {
+    display: none;
+  }
+  body > .modal {
+    display: block !important;
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    background-color: white;
+    box-shadow: none;
+    border: none;
+  }
+  .modal-content {
+    box-shadow: none;
+    border: none;
+    padding: 0;
+    margin: 0;
+  }
+  .no-print {
+    display: none !important;
+  }
+}
+*/
+function downloadInvoice() {
+    window.print();
+}
+
+
+// Ledger
+document.getElementById('ledger-form').addEventListener('submit', function(e) {
+    e.preventDefault();
+    const ledger = {
+        name: document.getElementById('ledger-name').value,
+        under: document.getElementById('ledger-under').value
+    };
+    ledgers.push(ledger);
+    updateLedgerTable();
+    updateExpenseIncomeLedgerSelect();
+    this.reset();
+    saveData();
+    alert('Ledger added successfully!');
+});
+
+function updateLedgerTable() {
+    const tbody = document.getElementById('ledger-table').querySelector('tbody');
+    tbody.innerHTML = '';
+    ledgers.forEach((ledger, index) => {
+        const row = tbody.insertRow();
+        row.innerHTML = `
+            <td>${ledger.name}</td>
+            <td>${ledger.under}</td>
+            <td class="action-icons">
+                <span onclick="editLedger(${index})">Edit</span>
+                <span onclick="deleteLedger(${index})">Delete</span>
+            </td>
+        `;
+    });
+}
+
+function editLedger(index) {
+    const ledger = ledgers[index];
+    const modal = document.createElement('div');
+    modal.className = 'modal';
+    modal.style.display = 'flex';
+    modal.innerHTML = `
+        <div class="modal-content">
+            <div class="buttons">
+                <button class="close-btn" onclick="this.closest('.modal').remove()">Close</button>
+            </div>
+            <h3>Edit Ledger</h3>
+            <form id="edit-ledger-form">
+                <label>Ledger Name</label>
+                <input type="text" value="${ledger.name}" id="edit-ledger-name" required>
+                <label>Under</label>
+                <input type="text" value="${ledger.under}" id="edit-ledger-under" required>
+                <button type="submit">Save</button>
+            </form>
+        </div>
+    `;
+    document.body.appendChild(modal);
+    modal.querySelector('#edit-ledger-form').addEventListener('submit', function(e) {
+        e.preventDefault();
+        ledgers[index] = {
+            name: document.getElementById('edit-ledger-name').value,
+            under: document.getElementById('edit-ledger-under').value
+        };
+        updateLedgerTable();
+        updateExpenseIncomeLedgerSelect();
+        this.reset();
+        saveData();
+        modal.remove();
+        alert('Ledger updated successfully!');
+    });
+}
+
+function deleteLedger(index) {
+    if (confirm(`Are you sure you want to delete ${ledgers[index].name}?`)) {
+        ledgers.splice(index, 1);
+        updateLedgerTable();
+        updateExpenseIncomeLedgerSelect();
+        saveData();
+        alert('Ledger deleted successfully!');
+    }
+}
+
+// Expense/Income
+function updateExpenseIncomeLedgerSelect() {
+    const select = document.getElementById('ei-ledger');
+    select.innerHTML = '<option value="">Select Ledger</option>';
+    ledgers.forEach(ledger => {
+        const option = document.createElement('option');
+        option.value = ledger.name;
+        option.textContent = ledger.name;
+        select.appendChild(option);
+    });
+}
+
+function updateDebtorCreditorSelect() {
+    const select = document.getElementById('ei-debtor-creditor');
+    select.innerHTML = '<option value="">None</option>';
+    debtors.forEach(debtor => {
+        const option = document.createElement('option');
+        option.value = `Debtor: ${debtor}`;
+        option.textContent = `Debtor: ${debtor}`;
+        select.appendChild(option);
+    });
+    creditors.forEach(creditor => {
+        const option = document.createElement('option');
+        option.value = `Creditor: ${creditor}`;
+        option.textContent = `Creditor: ${creditor}`;
+        select.appendChild(option);
+    });
+    chequeTransactions.forEach((tx, index) => {
+        if (!tx.cleared) {
+            const option = document.createElement('option');
+            option.value = `Cheque: ${index}`;
+            option.textContent = `Cheque: ${tx.chequeNumber} (${tx.type})`;
+            select.appendChild(option);
+        }
+    });
+}
+
+document.getElementById('ei-debtor-creditor').addEventListener('change', function() {
+    const select = document.getElementById('ei-payment-method');
+    const value = this.value;
+    select.innerHTML = `
+        <option value="cash">Cash</option>
+        <option value="upi">UPI</option>
+        ${!value.startsWith('Cheque: ') ? '<option value="cheque">Cheque</option>' : ''}
+    `;
+});
+
+document.getElementById('expense-income-form').addEventListener('submit', function(e) {
+    e.preventDefault();
+    const ei = {
+        name: document.getElementById('ei-name').value,
+        ledger: document.getElementById('ei-ledger').value,
+        type: document.getElementById('ei-type').value,
+        crDr: document.getElementById('ei-cr-dr').value,
+        rate: parseFloat(document.getElementById('ei-rate').value),
+        currency: document.getElementById('ei-currency').value,
+        debtorCreditor: document.getElementById('ei-debtor-creditor').value,
+        paymentMethod: document.getElementById('ei-payment-method').value
+    };
+    
+    if (!ei.name || !ei.ledger || !ei.type || !ei.crDr || isNaN(ei.rate) || !ei.currency || !ei.paymentMethod) {
+        alert('Please fill in all required fields.');
+        return;
+    }
+
+    if (['cash', 'upi'].includes(ei.paymentMethod) && ei.rate > (balance[ei.paymentMethod] || 0) && ei.crDr === 'dr') {
+        alert(`Insufficient ${ei.paymentMethod} balance!`);
+        return;
+    }
+    
+    if (ei.debtorCreditor.startsWith('Cheque: ')) {
+        const chequeIndex = parseInt(ei.debtorCreditor.replace('Cheque: ', ''));
+        const cheque = chequeTransactions[chequeIndex];
+        if (!cheque) {
+            alert('Invalid cheque selected.');
+            return;
+        }
+        if (cheque.cleared) {
+            alert('Cheque already cleared.');
+            return;
+        }
+        if ((cheque.type === 'Sale' && ei.crDr !== 'cr') || (cheque.type === 'Purchase' && ei.crDr !== 'dr')) {
+            alert(`Cheque clearance for ${cheque.type} must be ${cheque.type === 'Sale' ? 'Cr' : 'Dr'}.`);
+            return;
+        }
+        if (ei.rate !== cheque.amount || ei.currency !== cheque.currency) {
+            alert('Rate and currency must match the cheque details.');
+            return;
+        }
+        cheque.cleared = true;
+        if (cheque.type === 'Sale' && ei.crDr === 'cr') {
+            balance[ei.paymentMethod] += ei.rate;
+        } else if (cheque.type === 'Purchase' && ei.crDr === 'dr') {
+            balance[ei.paymentMethod] -= ei.rate;
+        }
+    }
+    
+    if (ei.debtorCreditor.startsWith('Debtor: ')) {
+        debtors.delete(ei.debtorCreditor.replace('Debtor: ', ''));
+    } else if (ei.debtorCreditor.startsWith('Creditor: ')) {
+        creditors.delete(ei.debtorCreditor.replace('Creditor: ', ''));
+    }
+    
+    if (!ei.debtorCreditor.startsWith('Cheque: ')) {
+        if (ei.crDr === 'cr') {
+            balance[ei.paymentMethod] += ei.rate;
+        } else {
+            balance[ei.paymentMethod] -= ei.rate;
+        }
+    }
+    
+    expenseIncome.push(ei);
+    updateExpenseIncomeTable();
+    updateDebtorCreditorSelect();
+    updateChequeTransactionsTable();
+    updateDashboard();
+    this.reset();
+    document.getElementById('ei-debtor-creditor').value = '';
+    document.getElementById('ei-payment-method').innerHTML = `
+        <option value="cash">Cash</option>
+        <option value="upi">UPI</option>
+        <option value="cheque">Cheque</option>
+    `;
+    saveData();
+    alert('Expense/Income recorded successfully!');
+});
+
+function updateExpenseIncomeTable() {
+    const tbody = document.getElementById('expense-income-table').querySelector('tbody');
+    tbody.innerHTML = '';
+    expenseIncome.forEach(ei => {
+        const row = tbody.insertRow();
+        row.innerHTML = `
+            <td>${ei.name}</td>
+            <td>${ei.ledger}</td>
+            <td>${ei.type}</td>
+            <td>${ei.crDr}</td>
+            <td>${ei.rate.toFixed(2)}</td>
+            <td>${ei.currency}</td>
+            <td>${ei.debtorCreditor || 'N/A'}</td>
+            <td>${ei.paymentMethod}</td>
+        `;
+    });
+}
+
+// Stock Alert
+function updateAlertItemSelect() {
+    const select = document.getElementById('alert-item-name');
+    select.innerHTML = '<option value="">Select Item</option>';
+    items.forEach(item => {
+        const option = document.createElement('option');
+        option.value = item.name;
+        option.textContent = item.name;
+        select.appendChild(option);
+    });
+}
+
+document.getElementById('stock-alert-form').addEventListener('submit', function(e) {
+    e.preventDefault();
+    const itemName = document.getElementById('alert-item-name').value;
+    const threshold = parseInt(document.getElementById('alert-threshold').value);
+    
+    if (!itemName || isNaN(threshold) || threshold < 1) {
+        alert('Please select an item and enter a valid threshold.');
+        return;
+    }
+
+    stockAlerts[itemName] = threshold;
+    updateStockAlertTable();
+    checkStockAlerts();
+    this.reset();
+    document.getElementById('alert-item-name').value = '';
+    saveData();
+    alert('Stock alert set successfully!');
+});
+
+function updateStockAlertTable() {
+    const tbody = document.getElementById('stock-alert-table').querySelector('tbody');
+    tbody.innerHTML = '';
+    Object.keys(stockAlerts).forEach(itemName => {
+        const threshold = stockAlerts[itemName];
+        const currentStock = stock[itemName] ? stock[itemName].stock : 0;
+        const row = tbody.insertRow();
+        row.innerHTML = `
+            <td>${itemName}</td>
+            <td>${threshold}</td>
+            <td>${currentStock}</td>
+            <td class="action-icons">
+                <span onclick="deleteStockAlert('${itemName}')">Delete</span>
+            </td>
+        `;
+    });
+}
+
+function deleteStockAlert(itemName) {
+    if (confirm(`Are you sure you want to delete the stock alert for ${itemName}?`)) {
+        delete stockAlerts[itemName];
+        updateStockAlertTable();
+        checkStockAlerts();
+        saveData();
+        alert('Stock alert deleted successfully!');
+    }
+}
+
+function checkStockAlerts() {
+    const notification = document.getElementById('stock-alert-notification');
+    let alertMessages = [];
+    Object.keys(stockAlerts).forEach(itemName => {
+        const threshold = stockAlerts[itemName];
+        const currentStock = stock[itemName] ? stock[itemName].stock : 0;
+        if (currentStock <= threshold) {
+            alertMessages.push(`${itemName}: Stock (${currentStock}) is below threshold (${threshold})`);
+        }
+    });
+    if (alertMessages.length > 0) {
+        notification.textContent = alertMessages.join(' | ');
+        notification.style.display = 'block';
+    } else {
+        notification.style.display = 'none';
+    }
+}
+
+// Cheque Transactions
+function formatTimeElapsed(transactionDate) {
+    const now = new Date();
+    const diff = now - transactionDate;
+    const seconds = Math.floor(diff / 1000);
+    const minutes = Math.floor(seconds / 60);
+    const hours = Math.floor(minutes / 60);
+    const days = Math.floor(hours / 24);
+    if (days > 0) return `${days}d ${hours % 24}h ${minutes % 60}m`;
+    if (hours > 0) return `${hours}h ${minutes % 60}m ${seconds % 60}s`;
+    if (minutes > 0) return `${minutes}m ${seconds % 60}s`;
+    return `${seconds}s`;
+}
+
+function updateChequeTransactionsTable() {
+    const tbody = document.getElementById('cheque-transactions-table').querySelector('tbody');
+    tbody.innerHTML = '';
+    chequeTransactions.forEach((tx, index) => {
+        if (!tx.cleared) {
+            const row = tbody.insertRow();
+            row.innerHTML = `
+                <td>${tx.type}</td>
+                <td>${tx.itemName}</td>
+                <td>${tx.amount.toFixed(2)}</td>
+                <td>${tx.currency}</td>
+                <td>${tx.chequeDate}</td>
+                <td>${tx.bankName}</td>
+                <td>${tx.chequeNumber}</td>
+                <td>${tx.transactionDate.toISOString().split('T')[0]}</td>
+                <td>${formatTimeElapsed(tx.transactionDate)}</td>
+            `;
+        }
+    });
+}
+
+// Reports
+function handleReportTypeChange() {
+    const reportType = document.getElementById('report-type').value;
+    const timeFrame = document.getElementById('report-time-frame').value;
+    const customDateDiv = document.getElementById('custom-date');
+    customDateDiv.style.display = timeFrame === 'custom' ? 'block' : 'none';
+    
+    document.getElementById('report-purchase-table').style.display = reportType === 'purchase' || reportType === 'all' ? 'table' : 'none';
+    document.getElementById('report-sale-table').style.display = reportType === 'sale' || reportType === 'all' ? 'table' : 'none';
+    document.getElementById('report-debtor-table').style.display = reportType === 'debtor' || reportType === 'all' ? 'table' : 'none';
+    document.getElementById('report-creditor-table').style.display = reportType === 'creditor' || reportType === 'all' ? 'table' : 'none';
+    document.getElementById('all-reports-popup').style.display = reportType === 'all' ? 'flex' : 'none';
+}
+
+function getDateRange() {
+    const timeFrame = document.getElementById('report-time-frame').value;
+    let startDate, endDate = new Date();
+    if (timeFrame === 'today') {
+        startDate = new Date();
+        startDate.setHours(0, 0, 0, 0);
+    } else if (timeFrame === 'week') {
+        startDate = new Date();
+        startDate.setDate(endDate.getDate() - 7);
+    } else if (timeFrame === 'month') {
+        startDate = new Date();
+        startDate.setMonth(endDate.getMonth() - 1);
+    } else if (timeFrame === 'year') {
+        startDate = new Date();
+        startDate.setFullYear(endDate.getFullYear() - 1);
+    } else if (timeFrame === 'custom') {
+        startDate = new Date(document.getElementById('report-start-date').value);
+        endDate = new Date(document.getElementById('report-end-date').value);
+    }
+    return { startDate, endDate };
+}
+
+function generateReport() {
+    const { startDate, endDate } = getDateRange();
+    let totalProfit = 0, totalSale = 0, totalPurchase = 0;
+    
+    // Purchase Table
+    const purchaseTbody = document.getElementById('report-purchase-table').querySelector('tbody');
+    purchaseTbody.innerHTML = '';
+    purchases.forEach(purchase => {
+        if (purchase.date >= startDate && purchase.date <= endDate) {
+            const row = purchaseTbody.insertRow();
+            const displayAmount = ['cash', 'upi'].includes(purchase.paymentMethod) ? -purchase.totalAmount : purchase.totalAmount;
+            row.innerHTML = `
+                <td>${purchase.itemName}</td>
+                <td>${purchase.quantity}</td>
+                <td>${displayAmount.toFixed(2)}</td>
+                <td>${purchase.currency}</td>
+                <td>${purchase.paymentMethod}</td>
+                <td>${purchase.date.toISOString().split('T')[0]}</td>
+            `;
+            totalPurchase += displayAmount;
+        }
+    });
+
+    // Sale Table
+    const saleTbody = document.getElementById('report-sale-table').querySelector('tbody');
+    saleTbody.innerHTML = '';
+    sales.forEach((sale, index) => {
+        if (sale.date >= startDate && sale.date <= endDate) {
+            const row = saleTbody.insertRow();
+            row.innerHTML = `
+                <td>${sale.itemName}</td>
+                <td>${sale.customerName}</td>
+                <td>${sale.quantity}</td>
+                <td>${sale.discount}%</td>
+                <td>${sale.totalAmount.toFixed(2)}</td>
+                <td>${sale.currency}</td>
+                <td>${sale.paymentMethod}</td>
+                <td>${sale.date.toISOString().split('T')[0]}</td>
+            `;
+            totalSale += sale.totalAmount;
+        }
+    });
+
+    // Debtor Table
+    const debtorTbody = document.getElementById('report-debtor-table').querySelector('tbody');
+    debtorTbody.innerHTML = '';
+    sales.forEach((sale, index) => {
+        if (sale.paymentMethod === 'debtor' && sale.date >= startDate && sale.date <= endDate) {
+            const row = debtorTbody.insertRow();
+            row.innerHTML = `
+                <td>${sale.customerName}</td>
+                <td>${sale.itemName}</td>
+                <td>${sale.quantity}</td>
+                <td>${sale.totalAmount.toFixed(2)}</td>
+                <td>${sale.currency}</td>
+                <td>${sale.date.toISOString().split('T')[0]}</td>
+                <td><span class="action-icons" onclick="generateInvoice(${index})">Invoice</span></td>
+            `;
+        }
+    });
+
+    // Creditor Table
+    const creditorTbody = document.getElementById('report-creditor-table').querySelector('tbody');
+    creditorTbody.innerHTML = '';
+    purchases.forEach(purchase => {
+        if (purchase.paymentMethod === 'creditor' && purchase.date >= startDate && purchase.date <= endDate) {
+            const item = items.find(i => i.name === purchase.itemName);
+            const row = creditorTbody.insertRow();
+            row.innerHTML = `
+                <td>${item ? item.supplierName : 'N/A'}</td>
+                <td>${purchase.itemName}</td>
+                <td>${purchase.quantity}</td>
+                <td>${purchase.totalAmount.toFixed(2)}</td>
+                <td>${purchase.currency}</td>
+                <td>${purchase.date.toISOString().split('T')[0]}</td>
+            `;
+        }
+    });
+
+    // Item Stock Table
+    const itemTbody = document.getElementById('report-item-table').querySelector('tbody');
+    itemTbody.innerHTML = '';
+    Object.keys(stock).forEach(itemName => {
+        const row = itemTbody.insertRow();
+        row.innerHTML = `
+            <td>${itemName}</td>
+            <td>${stock[itemName].stock}</td>
+            <td>${stock[itemName].sold}</td>
+        `;
+    });
+
+    // Update stats
+    totalProfit = totalSale + totalPurchase;
+    document.getElementById('report-total-profit').textContent = totalProfit.toFixed(2);
+    document.getElementById('report-total-sale').textContent = totalSale.toFixed(2);
+    document.getElementById('report-total-purchase').textContent = totalPurchase.toFixed(2);
+    document.getElementById('report-total-creditors').textContent = creditors.size;
+    document.getElementById('report-total-debtors').textContent = debtors.size;
+}
+
+function closePopup() {
+    document.getElementById('all-reports-popup').style.display = 'none';
+}
+
+function searchAllReports() {
+    const searchDate = new Date(document.getElementById('search-date').value);
+    const searchItem = document.getElementById('search-item').value.toLowerCase();
+    
+    const purchaseTbody = document.getElementById('report-purchase-table').querySelector('tbody');
+    purchaseTbody.innerHTML = '';
+    purchases.forEach(purchase => {
+        if ((!searchDate || purchase.date.toISOString().split('T')[0] === searchDate.toISOString().split('T')[0]) &&
+            (!searchItem || purchase.itemName.toLowerCase().includes(searchItem))) {
+            const row = purchaseTbody.insertRow();
+            const displayAmount = ['cash', 'upi'].includes(purchase.paymentMethod) ? -purchase.totalAmount : purchase.totalAmount;
+            row.innerHTML = `
+                <td>${purchase.itemName}</td>
+                <td>${purchase.quantity}</td>
+                <td>${displayAmount.toFixed(2)}</td>
+                <td>${purchase.currency}</td>
+                <td>${purchase.paymentMethod}</td>
+                <td>${purchase.date.toISOString().split('T')[0]}</td>
+            `;
+        }
+    });
+
+    const saleTbody = document.getElementById('report-sale-table').querySelector('tbody');
+    saleTbody.innerHTML = '';
+    sales.forEach((sale, index) => {
+        if ((!searchDate || sale.date.toISOString().split('T')[0] === searchDate.toISOString().split('T')[0]) &&
+            (!searchItem || sale.itemName.toLowerCase().includes(searchItem))) {
+            const row = saleTbody.insertRow();
+            row.innerHTML = `
+                <td>${sale.itemName}</td>
+                <td>${sale.customerName}</td>
+                <td>${sale.quantity}</td>
+                <td>${sale.discount}%</td>
+                <td>${sale.totalAmount.toFixed(2)}</td>
+                <td>${sale.currency}</td>
+                <td>${sale.paymentMethod}</td>
+                <td>${sale.date.toISOString().split('T')[0]}</td>
+            `;
+        }
+    });
+
+    const debtorTbody = document.getElementById('report-debtor-table').querySelector('tbody');
+    debtorTbody.innerHTML = '';
+    sales.forEach((sale, index) => {
+        if (sale.paymentMethod === 'debtor' &&
+            (!searchDate || sale.date.toISOString().split('T')[0] === searchDate.toISOString().split('T')[0]) &&
+            (!searchItem || sale.itemName.toLowerCase().includes(searchItem))) {
+            const row = debtorTbody.insertRow();
+            row.innerHTML = `
+                <td>${sale.customerName}</td>
+                <td>${sale.itemName}</td>
+                <td>${sale.quantity}</td>
+                <td>${sale.totalAmount.toFixed(2)}</td>
+                <td>${sale.currency}</td>
+                <td>${sale.date.toISOString().split('T')[0]}</td>
+                <td><span class="action-icons" onclick="generateInvoice(${index})">Invoice</span></td>
+            `;
+        }
+    });
+
+    const creditorTbody = document.getElementById('report-creditor-table').querySelector('tbody');
+    creditorTbody.innerHTML = '';
+    purchases.forEach(purchase => {
+        if (purchase.paymentMethod === 'creditor' &&
+            (!searchDate || purchase.date.toISOString().split('T')[0] === searchDate.toISOString().split('T')[0]) &&
+            (!searchItem || purchase.itemName.toLowerCase().includes(searchItem))) {
+            const item = items.find(i => i.name === purchase.itemName);
+            const row = creditorTbody.insertRow();
+            row.innerHTML = `
+                <td>${item ? item.supplierName : 'N/A'}</td>
+                <td>${purchase.itemName}</td>
+                <td>${purchase.quantity}</td>
+                <td>${purchase.totalAmount.toFixed(2)}</td>
+                <td>${purchase.currency}</td>
+                <td>${purchase.date.toISOString().split('T')[0]}</td>
+            `;
+        }
+    });
+}
+
+function viewDebtors() {
+    document.getElementById('report-type').value = 'debtor';
+    handleReportTypeChange();
+    generateReport();
+}
+
+function viewCreditors() {
+    document.getElementById('report-type').value = 'creditor';
+    handleReportTypeChange();
+    generateReport();
+}
+
+// Timer for Cheque Transactions
+function startTimer() {
+    setInterval(() => {
+        updateChequeTransactionsTable();
+    }, 1000);
+}
+
+// Keyboard Shortcuts
+document.addEventListener('keydown', function(e) {
+    if (e.ctrlKey && e.key === 'd' && document.getElementById('companies').classList.contains('active')) {
+        e.preventDefault();
+        const index = prompt('Enter the index of the company to delete:');
+        if (index !== null && !isNaN(index)) {
+            deleteCompany(parseInt(index));
+        }
+    } else if (e.ctrlKey && e.key === 'a') {
+        e.preventDefault();
+        const androidMode = document.getElementById('android-mode');
+        androidMode.checked = !androidMode.checked;
+        document.querySelector('.sidebar').classList.toggle('android-mode', androidMode.checked);
+        document.querySelector('.content').classList.toggle('android-mode', androidMode.checked);
+    } else if (e.key.startsWith('F')) {
+        const functionKeys = {
+            'F1': 'dashboard',
+            'F2': 'capital',
+            'F3': 'companies',
+            'F4': 'sale-item-list',
+            'F5': 'purchase',
+            'F6': 'sale',
+            'F7': 'ledger',
+            'F8': 'expense-income',
+            'F9': 'stock-alert',
+            'F10': 'reports',
+            'F11': 'cheque-transactions',
+            'F12': 'info'
+        };
+        const sectionId = functionKeys[e.key];
+        if (sectionId) {
+            e.preventDefault();
+            showSection(sectionId);
+        }
+    }
+});
+
+// Initialize
+loadData();
+document.getElementById('report-time-frame').addEventListener('change', handleReportTypeChange);
+updateCompaniesTable();
+updateSaleItemTable();
+updatePurchaseItemSelect();
+updateSaleItemSelect();
+updateAlertItemSelect();
+updateLedgerTable();
+updateExpenseIncomeLedgerSelect();
+updateDebtorCreditorSelect();
+updatePurchaseTable();
+updateSaleTable();
+updateStockAlertTable();
+updateChequeTransactionsTable();
+updateDashboard();
+checkStockAlerts();
+startTimer();
+    </script>
+</body>
+</html>
       
+
